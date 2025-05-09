@@ -1,0 +1,57 @@
+name: Windows RDP Setup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *' # إعادة التشغيل يومياً لتجنب الحظر
+
+jobs:
+  create-rdp:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Setup RDP
+      run: |
+        # تنزيل وتثبيت Ngrok
+        Invoke-WebRequest -Uri "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+        Expand-Archive -Path "ngrok.zip" -DestinationPath .
+        
+        # تنزيل وتثبيت Chrome للوصول عن بعد
+        Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/chrome_installer.exe" -OutFile "chrome_installer.exe"
+        Start-Process -FilePath "chrome_installer.exe" -ArgumentList "/silent /install" -Wait
+        
+        # تمكين RDP
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        
+        # تعيين كلمة مرور للمستخدم الحالي
+        $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+        $password = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 12 | % {[char]$_})
+        net user $user $password
+        Write-Host "Password: $password"
+        
+        # تشغيل Ngrok للتعريض الآمن
+        $ngrok_token = "YOUR_NGROK_TOKEN" # استبدل ب token الخاص بك
+        Start-Process -FilePath "ngrok.exe" -ArgumentList "authtoken $ngrok_token" -Wait
+        Start-Process -FilePath "ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
+        
+        # الحفاظ على الجلسة نشطة
+        while ($true) {
+          Write-Host "RDP session is active"
+          Start-Sleep -Seconds 60
+        }
+        
+    - name: Get Ngrok Tunnel
+      id: ngrok
+      run: |
+        Start-Sleep -Seconds 10 # انتظر حتى يبدأ Ngrok
+        $tunnels = (Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing).Content | ConvertFrom-Json
+        $rdp_tunnel = $tunnels.tunnels | Where-Object { $_.proto -eq "tcp" }
+        echo "::set-output name=url::$($rdp_tunnel.public_url)"
+        
+    - name: Display RDP Info
+      run: |
+        echo "RDP Connection Details:"
+        echo "Address: ${{ steps.ngrok.outputs.url }}"
+        echo "Username: ${{ env.USERNAME }}"
+        echo "Password: $password" # سيتم عرضه في الخطوة السابقة
